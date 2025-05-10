@@ -27,13 +27,61 @@ class Quant(torch.autograd.Function):
         grad_input[i < ctx.min] = 0
         grad_input[i > ctx.max] = 0
         return grad_input, None, None
-    
+
+
 class MultiSpike(nn.Module):
+    def __init__(
+            self,
+            min_value=0,
+            max_value=4,
+            Norm=None,
+
+    ):
+        super().__init__()
+        if Norm == None:
+            self.Norm = max_value
+        else:
+            self.Norm = Norm
+        self.min_value = min_value
+        self.max_value = max_value
+        self.register_buffer("spike_count_int", torch.tensor(0.0))
+        self.extra_losses = []
+
+    @staticmethod
+    def spike_function(x, min_value, max_value):
+        return Quant.apply(x, min_value, max_value)
+
+
+    def __repr__(self):
+        return f"MultiSpike(Max_Value={self.max_value}, Min_Value={self.min_value}, Norm={self.Norm})"
+
+    def forward(self, x):  # B C H W
+        out = self.spike_function(x, min_value=self.min_value, max_value=self.max_value) / (self.Norm)
+        if not self.training:
+            spike_sum = out.sum()
+            self.spike_count_int += spike_sum.detach()
+        return out
+
+def fd_loss(spikes):
+    import torch.distributions as dist
+    spikes_flat = spikes.view(spikes.size(0),-1)
+    mean = spikes_flat.mean(dim=1, keepdim=True)
+    std = spikes_flat.std(dim=1, keepdim=True)
+    normal_dist = dist.Normal(mean,std+1e-6)
+    p_sel = normal_dist.log_prob(spikes_flat).exp()
+    log_p_sel = torch.log(p_sel + 1e-6) / torch.log(torch.tensor(2.0))
+    entropy = -p_sel * log_p_sel
+    entropy = torch.where(torch.isnan(entropy), torch.zeros_like(entropy), entropy)
+    entropy = torch.where(p_sel == 0, torch.zeros_like(entropy),entropy)
+    loss = -entropy.mean()
+    return loss *3e-3
+class MultiSpike_first(nn.Module):
     def __init__(
         self,
         min_value=0,
         max_value=4,
         Norm=None,
+
         ):
         super().__init__()
         if Norm == None:
@@ -42,16 +90,30 @@ class MultiSpike(nn.Module):
             self.Norm = Norm
         self.min_value = min_value
         self.max_value = max_value
+        self.register_buffer("spike_count_int", torch.tensor(0.0))
+        self.register_buffer("spike_count_int_encod", torch.tensor(0.0))
+        self.extra_losses = []
     
     @staticmethod
     def spike_function(x, min_value, max_value):
         return Quant.apply(x, min_value, max_value)
-        
+
     def __repr__(self):
         return f"MultiSpike(Max_Value={self.max_value}, Min_Value={self.min_value}, Norm={self.Norm})"     
 
     def forward(self, x): # B C H W
-        return self.spike_function(x, min_value=self.min_value, max_value=self.max_value) / (self.Norm)
+        out =  self.spike_function(x, min_value=self.min_value, max_value=self.max_value) / (self.Norm)
+        if not self.training:
+            spike_sum = out.sum()
+            self.spike_count_int += spike_sum.detach()
+            self.spike_count_int_encod += spike_sum.detach()
+        if self.training:
+            FD_loss= fd_loss(out)
+            if FD_loss is not None:
+                self.extra_losses.append(FD_loss)
+        return out
+
+
 
 class BNAndPadLayer(nn.Module):
     def __init__(
@@ -260,7 +322,41 @@ class MS_ConvBlock(nn.Module):
         x = x_feat + x
 
         return x
+class MS_ConvBlock_spike_SepConv_first(nn.Module):
+    def __init__(
+        self,
+        dim,
+        mlp_ratio=4.0,
+    ):
+        super().__init__()
 
+        self.Conv = SepConv_Spike(dim=dim)
+
+        self.mlp_ratio = mlp_ratio
+
+        self.spike1 = MultiSpike_first()
+        self.conv1 = nn.Conv2d(
+            dim, dim * mlp_ratio, kernel_size=3, padding=1, groups=1, bias=False
+        )
+        self.bn1 = nn.BatchNorm2d(dim * mlp_ratio)
+        self.spike2 = MultiSpike()
+        self.conv2 = nn.Conv2d(
+            dim * mlp_ratio, dim, kernel_size=3, padding=1, groups=1, bias=False
+        )
+        self.bn2 = nn.BatchNorm2d(dim)
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+
+        x = self.Conv(x) + x
+        x_feat = x
+        x = self.spike1(x)
+        x = self.bn1(self.conv1(x)).reshape(B, self.mlp_ratio * C, H, W)
+        x = self.spike2(x)
+        x = self.bn2(self.conv2(x)).reshape(B, C, H, W)
+        x = x_feat + x
+
+        return x
 class MS_ConvBlock_spike_SepConv(nn.Module):
     def __init__(
         self,
@@ -633,6 +729,52 @@ class MS_DownSampling(nn.Module):
 
         return x
 
+class DFE_BatchNorm2d(nn.BatchNorm2d):
+    def __init__(self, num_features, **kwargs):
+        super().__init__(num_features,**kwargs)
+        self.extra_losses=[]
+    def forward(self,x):
+        out =super().forward(x)
+        if self.training:
+            ratio = (self.bias/(self.weight+1e-10)) +1.0
+            ratio_loss = torch.norm(ratio, p=2) * 1e-4
+            self.extra_losses.append(ratio_loss)
+        return out
+
+class MS_DownSampling_first(nn.Module):
+    def __init__(
+        self,
+        in_channels=2,
+        embed_dims=256,
+        kernel_size=3,
+        stride=2,
+        padding=1,
+        first_layer=True,
+        T=None,
+    ):
+        super().__init__()
+
+        self.encode_conv = nn.Conv2d(
+            in_channels,
+            embed_dims,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+        )
+
+        self.encode_bn = DFE_BatchNorm2d(embed_dims)
+        self.first_layer = first_layer
+        if not first_layer:
+            self.encode_spike = MultiSpike()
+
+    def forward(self, x):
+
+        if hasattr(self, "encode_spike"):
+            x = self.encode_spike(x)
+        x = self.encode_conv(x)
+        x = self.encode_bn(x)
+
+        return x
 
 
 class Spiking_vit_MetaFormer_Spike_SepConv(nn.Module):
@@ -663,7 +805,7 @@ class Spiking_vit_MetaFormer_Spike_SepConv(nn.Module):
             x.item() for x in torch.linspace(0, drop_path_rate, depths)
         ]  # stochastic depth decay rule
 
-        self.downsample1_1 = MS_DownSampling(
+        self.downsample1_1 = MS_DownSampling_first(
             in_channels=in_channels,
             embed_dims=embed_dim[0] // 2,
             kernel_size=7,
@@ -674,7 +816,7 @@ class Spiking_vit_MetaFormer_Spike_SepConv(nn.Module):
         )
 
         self.ConvBlock1_1 = nn.ModuleList(
-            [MS_ConvBlock_spike_SepConv(dim=embed_dim[0] // 2, mlp_ratio=mlp_ratios)]
+            [MS_ConvBlock_spike_SepConv_first(dim=embed_dim[0] // 2, mlp_ratio=mlp_ratios)]
         )
 
         self.downsample1_2 = MS_DownSampling(

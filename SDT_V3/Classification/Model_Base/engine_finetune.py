@@ -20,6 +20,10 @@ from timm.utils import accuracy
 
 import util.misc as misc
 import util.lr_sched as lr_sched
+from models import MultiSpike
+from models import MultiSpike_first
+
+
 
 def train_one_epoch(
     model,
@@ -69,8 +73,13 @@ def train_one_epoch(
                 loss = criterion(samples, outputs, targets)
                 outputs_acc, _ = outputs
             else:
+
                 loss = criterion(outputs, targets)
                 outputs_acc = outputs
+            for m in model.modules():
+                if hasattr(m, 'extra_losses'):
+                    loss += sum(m.extra_losses)
+                    m.extra_losses.clear()
         loss_value = loss.item()
 
         if not math.isfinite(loss_value):
@@ -135,7 +144,8 @@ def evaluate(data_loader, model, device):
 
     # switch to evaluation mode
     model.eval()
-
+    total_spike_count =0.0
+    encod_spike_count = 0.0
     for batch in metric_logger.log_every(data_loader, 500, header):
         images = batch[0]
         target = batch[-1]
@@ -145,6 +155,15 @@ def evaluate(data_loader, model, device):
         # compute output
         with torch.cuda.amp.autocast():
             output = model(images)
+            for m in model.modules():
+                if isinstance(m,MultiSpike_first):
+                    total_spike_count += m.spike_count_int.item()
+                    encod_spike_count += m.spike_count_int_encod.item()
+                    m.spike_count_int.zero_()
+                    m.spike_count_int_encod.zero_()
+                if isinstance(m,MultiSpike):
+                    total_spike_count += m.spike_count_int.item()
+                    m.spike_count_int.zero_()
             loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
@@ -159,5 +178,9 @@ def evaluate(data_loader, model, device):
             top1=metric_logger.acc1, top5=metric_logger.acc5, losses=metric_logger.loss
         )
     )
+    total_spike_count = total_spike_count / 50000
+    encod_spike_count = encod_spike_count / 50000
+    print(f"\n Total spikes: {total_spike_count:.1f}")
+    print(f"\n Encod spikes: {encod_spike_count:.1f}")
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}

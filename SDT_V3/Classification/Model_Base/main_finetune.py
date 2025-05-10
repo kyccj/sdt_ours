@@ -14,10 +14,21 @@ import datetime
 import json
 import numpy as np
 import os
+# os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+# os.environ["NCCL_P2P_DISABLE"]="0"
+# # os.environ["CUDA_VISIBLE_DEVICES"]='0,1,2,3,4,6,7,8'#imagenet
+# # os.environ["CUDA_VISIBLE_DEVICES"]='1,3,4,6,7,8'#imagenet
+# # os.environ["CUDA_VISIBLE_DEVICES"]='1,3,4,6'#imagenet
+# # os.environ["CUDA_VISIBLE_DEVICES"]='0,1,2,3'#imagenet
+# # os.environ["CUDA_VISIBLE_DEVICES"]='8'#imagenet
+# os.environ["CUDA_VISIBLE_DEVICES"]='4,5,6,9'
+# os.environ['WORLD_SIZE'] ='4'
 import time
 from pathlib import Path
 import importlib
-
+# os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+# os.environ["NCCL_P2P_DISABLE"]="0"
+# os.environ["CUDA_VISIBLE_DEVICES"]='4,5,6,9'
 import torch
 from util.samplers import RASampler
 # import torchinfo
@@ -49,7 +60,7 @@ def get_args_parser():
     )
     parser.add_argument(
         "--batch_size",
-        default=64,
+        default=512,
         type=int,
         help="Batch size per GPU (effective batch size is batch_size * accum_iter * # gpus",
     )
@@ -62,13 +73,18 @@ def get_args_parser():
     )
     parser.add_argument("--finetune", default="", help="finetune from checkpoint")
     parser.add_argument(
-        "--data_path", default="./data", type=str, help="dataset path"
+        "--data_path", default="/mnt/hdd1/kyccj/ImageNet_down", type=str, help="dataset path"
     )
-
+    parser.add_argument(
+        "--kd",
+        action="store_true",
+        default=False,
+        help="kd or not",
+    )
     # Model parameters
     parser.add_argument(
         "--model",
-        default="spikformer",
+        default="Efficient_Spiking_Transformer_m",
         type=str,
         metavar="MODEL",
         help="Name of model to train",
@@ -131,7 +147,7 @@ def get_args_parser():
     )
 
     parser.add_argument(
-        "--warmup_epochs", type=int, default=10, metavar="N", help="epochs to warmup LR"
+        "--warmup_epochs", type=int, default=5, metavar="N", help="epochs to warmup LR"
     )
 
     # Augmentation parameters
@@ -233,12 +249,12 @@ def get_args_parser():
 
     parser.add_argument(
         "--output_dir",
-        default="./output_dir",
+        default="/mnt/hdd1/kyccj/H-direct_new_base/ImageNet_SDTv3/ours/1",
         help="path where to save, empty for no saving",
     )
     parser.add_argument(
         "--log_dir",
-        default="./output_dir",
+        default="/mnt/hdd1/kyccj/H-direct_new_base/ImageNet_SDTv3/ours/1",
         help="path where to tensorboard log",
     )
     parser.add_argument(
@@ -250,7 +266,7 @@ def get_args_parser():
     parser.add_argument(
         "--start_epoch", default=0, type=int, metavar="N", help="start epoch"
     )
-    parser.add_argument("--eval", action="store_true",default=True, help="Perform evaluation only")
+    parser.add_argument("--eval", action="store_true",default=False, help="Perform evaluation only")
     parser.add_argument(
         "--repeated_aug",
         action="store_true",
@@ -433,6 +449,7 @@ def main(args):
     )
 
     if args.eval:
+
         test_stats = evaluate(data_loader_val, model, device)
         print(
             f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%"

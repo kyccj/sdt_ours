@@ -12,21 +12,23 @@ Others weights are coming soon.
 Train:
 
 ```shell
-torchrun --standalone --nproc_per_node=8 \
+CUDA_VISIBLE_DEVICES=4,5,6,9 torchrun --standalone --nproc_per_node=4 \
   main_finetune.py \
-  --batch_size 256 \
+  --batch_size 512 \
   --blr 6e-4 \
   --warmup_epochs 5 \
   --epochs 200 \
-  --model Efficient_Spiking_Transformer_s \
-  --data_path /your/data/path \
-  --output_dir outputs/T1 \
-  --log_dir outputs/T1 \
+  --model Efficient_Spiking_Transformer_m \
+  --data_path /mnt/hdd1/kyccj/ImageNet_down \
+  --output_dir /mnt/hdd1/kyccj/H-direct_new_base/ImageNet_SDTv3/ours/2 \
+  --log_dir /mnt/hdd1/kyccj/H-direct_new_base/ImageNet_SDTv3/ours/2 \
   --model_mode ms \
   --dist_eval
 ```
 
-
+  --master_port=29601\
+  --rdzv_endpoint=localhost:29501\
+  --rdzv_id=exp3\
 
 ### Data Prepare
 
