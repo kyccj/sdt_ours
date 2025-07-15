@@ -38,7 +38,7 @@ from util.datasets import build_dataset
 from util.misc import NativeScalerWithGradNormCount as NativeScaler
 from util.kd_loss import DistillationLoss
 
-import spikformer
+import spikformer_s_direct
 from engine_finetune import train_one_epoch, evaluate
 from timm.data import create_loader
 
@@ -253,7 +253,7 @@ def get_args_parser():
     parser.add_argument(
         "--start_epoch", default=0, type=int, metavar="N", help="start epoch"
     )
-    parser.add_argument("--eval", action="store_true",default=True, help="Perform evaluation only")
+    parser.add_argument("--eval", action="store_true",default=False, help="Perform evaluation only")
     parser.add_argument(
         "--repeated_aug",
         action="store_true",
@@ -399,7 +399,7 @@ def main(args):
         )
 
     
-    model = spikformer.__dict__[args.model](kd=args.kd)
+    model = spikformer_s_direct.__dict__[args.model](kd=args.kd)
     model.T = args.time_steps
     model_ema = None
     if args.finetune:

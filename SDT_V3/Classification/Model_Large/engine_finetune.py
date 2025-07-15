@@ -15,11 +15,18 @@ from typing import Iterable, Optional
 
 import torch
 
+
+
+import spikformer_s_direct
+
 from timm.data import Mixup
 from timm.utils import accuracy
 
 import util.misc as misc
 import util.lr_sched as lr_sched
+
+
+
 # from spikingjelly.clock_driven import functional
 
 
@@ -143,7 +150,8 @@ def evaluate(data_loader, model, device):
 
     # switch to evaluation mode
     model.eval()
-
+    total_spike_count =0.0
+    encod_spike_count = 0.0
     for batch in metric_logger.log_every(data_loader, 500, header):
         images = batch[0]
         target = batch[-1]
@@ -153,6 +161,15 @@ def evaluate(data_loader, model, device):
         # compute output
         with torch.cuda.amp.autocast():
             output = model(images)
+            for m in model.modules():
+                if isinstance(m,spikformer_s_direct.Multispike_first):
+                    total_spike_count += m.spike_count_int.item()
+                    encod_spike_count += m.spike_count_int_encod.item()
+                    m.spike_count_int.zero_()
+                    m.spike_count_int_encod.zero_()
+                if isinstance(m,spikformer_s_direct.Multispike):
+                    total_spike_count += m.spike_count_int.item()
+                    m.spike_count_int.zero_()
             loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
@@ -169,5 +186,9 @@ def evaluate(data_loader, model, device):
             top1=metric_logger.acc1, top5=metric_logger.acc5, losses=metric_logger.loss
         )
     )
+    total_spike_count = total_spike_count / 50000
+    encod_spike_count = encod_spike_count / 50000
+    print(f"\n Total spikes: {total_spike_count:.1f}")
+    print(f"\n Encod spikes: {encod_spike_count:.1f}")
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}

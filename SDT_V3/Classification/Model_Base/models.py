@@ -29,7 +29,7 @@ class Quant(torch.autograd.Function):
         return grad_input, None, None
 
 
-class MultiSpike(nn.Module):
+class MultiSpike_b(nn.Module):
     def __init__(
             self,
             min_value=0,
@@ -75,7 +75,7 @@ def fd_loss(spikes):
     entropy = torch.where(p_sel == 0, torch.zeros_like(entropy),entropy)
     loss = -entropy.mean()
     return loss *3e-3
-class MultiSpike_first(nn.Module):
+class MultiSpike_first_b(nn.Module):
     def __init__(
         self,
         min_value=0,

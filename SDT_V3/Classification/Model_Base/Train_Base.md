@@ -20,8 +20,8 @@ CUDA_VISIBLE_DEVICES=4,5,6,9 torchrun --standalone --nproc_per_node=4 \
   --epochs 200 \
   --model Efficient_Spiking_Transformer_m \
   --data_path /mnt/hdd1/kyccj/ImageNet_down \
-  --output_dir /mnt/hdd1/kyccj/H-direct_new_base/ImageNet_SDTv3/ours/2 \
-  --log_dir /mnt/hdd1/kyccj/H-direct_new_base/ImageNet_SDTv3/ours/2 \
+  --output_dir /mnt/hdd1/kyccj/H-direct_new_base/ImageNet_SDTv3/ours/1.0 \
+  --log_dir /mnt/hdd1/kyccj/H-direct_new_base/ImageNet_SDTv3/ours/1.0 \
   --model_mode ms \
   --dist_eval
 ```

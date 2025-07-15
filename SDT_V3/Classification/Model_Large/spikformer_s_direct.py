@@ -17,7 +17,7 @@ from torchvision import transforms
 import matplotlib.pyplot as plt
 import torch.nn as nn
 #timestep 1x4
-T=4
+T=8
 
 class multispike(torch.autograd.Function):
     @staticmethod
@@ -41,10 +41,50 @@ class Multispike(nn.Module):
         self.lens = norm
         self.spike = spike
         self.norm=norm
+        self.register_buffer("spike_count_int", torch.tensor(0.0))
 
     def forward(self, inputs):
-        return self.spike.apply(inputs)/self.norm
+        out = self.spike.apply(inputs)/self.norm
+        if not self.training:
+            spike_sum = out.sum()
+            self.spike_count_int += spike_sum.detach()
+        return out
+def fd_loss(spikes):
+    import torch.distributions as dist
+    spikes_flat = spikes.view(spikes.size(0),-1)
+    mean = spikes_flat.mean(dim=1, keepdim=True)
+    std = spikes_flat.std(dim=1, keepdim=True)
+    normal_dist = dist.Normal(mean,std+1e-6)
+    p_sel = normal_dist.log_prob(spikes_flat).exp()
+    log_p_sel = torch.log(p_sel + 1e-6) / torch.log(torch.tensor(2.0))
+    entropy = -p_sel * log_p_sel
+    entropy = torch.where(torch.isnan(entropy), torch.zeros_like(entropy), entropy)
+    entropy = torch.where(p_sel == 0, torch.zeros_like(entropy),entropy)
+    loss = -entropy.mean()
+    return loss *3e-3
 
+class Multispike_first(nn.Module):
+    def __init__(self, spike=multispike,norm=T):
+        super().__init__()
+        self.lens = norm
+        self.spike = spike
+        self.norm=norm
+        self.register_buffer("spike_count_int", torch.tensor(0.0))
+        self.register_buffer("spike_count_int_encod", torch.tensor(0.0))
+        self.extra_losses = []
+
+    def forward(self, inputs):
+        out = self.spike.apply(inputs)/self.norm
+        self.extra_losses=[]
+        if not self.training:
+            spike_sum = out.sum()
+            self.spike_count_int += spike_sum.detach()
+            self.spike_count_int_encod += spike_sum.detach()
+        if self.training:
+            FD_loss= fd_loss(out)
+            if FD_loss is not None:
+                self.extra_losses.append(FD_loss)
+        return out
 
 def MS_conv_unit(in_channels, out_channels,kernel_size=1,padding=0,groups=1):
     return nn.Sequential(
@@ -72,6 +112,26 @@ class MS_ConvBlock(nn.Module):
         x = self.neuron2(x)
         x = self.conv2(x)
         x = x +short_cut
+        return x
+
+class MS_ConvBlock_first(nn.Module):
+    def __init__(self, dim,
+                 mlp_ratio=4.0):
+        super().__init__()
+
+        self.neuron1 = Multispike_first()
+        self.conv1 = MS_conv_unit(dim, dim * mlp_ratio, 3, 1)
+
+        self.neuron2 = Multispike()
+        self.conv2 = MS_conv_unit(dim * mlp_ratio, dim, 3, 1)
+
+    def forward(self, x, mask=None):
+        short_cut = x
+        x = self.neuron1(x)
+        x = self.conv1(x)
+        x = self.neuron2(x)
+        x = self.conv2(x)
+        x = x + short_cut
         return x
 
 class MS_MLP(nn.Module):
@@ -287,6 +347,50 @@ class MS_DownSampling(nn.Module):
         x = self.encode_bn(x).reshape(T, B, -1, H, W).contiguous()
         return x
 
+class DFE_BatchNorm2d(nn.BatchNorm2d):
+    def __init__(self, num_features, **kwargs):
+        super().__init__(num_features,**kwargs)
+        self.extra_losses=[]
+    def forward(self,x):
+        out =super().forward(x)
+        self.extra_losses=[]
+        if self.training:
+            ratio = (self.bias/(self.weight+1e-10)) +1.0
+            ratio_loss = torch.norm(ratio, p=2) * 1e-4
+            self.extra_losses.append(ratio_loss)
+        return out
+class MS_DownSampling_first(nn.Module):
+    def __init__(
+        self,
+        in_channels=2,
+        embed_dims=256,
+        kernel_size=3,
+        stride=2,
+        padding=1,
+        first_layer=True,
+    ):
+        super().__init__()
+
+        self.encode_conv = nn.Conv2d(
+            in_channels,
+            embed_dims,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+        )
+
+        self.encode_bn =DFE_BatchNorm2d(embed_dims)
+        if not first_layer:
+            self.encode_lif = Multispike()
+
+    def forward(self, x):
+        T, B, _, _, _ = x.shape
+        if hasattr(self, "encode_lif"):
+            x = self.encode_lif(x)
+        x = self.encode_conv(x.flatten(0, 1))
+        _, _, H, W = x.shape
+        x = self.encode_bn(x).reshape(T, B, -1, H, W).contiguous()
+        return x
 
 class Spikformer(nn.Module):
     def __init__(self, T=1,
@@ -314,13 +418,12 @@ class Spikformer(nn.Module):
 
         ### MAE encoder spikformer
         self.T = T
-        self.depths=depths
         self.patch_size = patch_size
         self.embed_dim =embed_dim
         dpr = [
             x.item() for x in torch.linspace(0, drop_path_rate, depths)
         ]  # stochastic depth decay rule
-        self.downsample1_1 = MS_DownSampling(
+        self.downsample1_1 = MS_DownSampling_first(
             in_channels=in_channels,
             embed_dims=embed_dim[0] // 2,
             kernel_size=7,
@@ -330,7 +433,7 @@ class Spikformer(nn.Module):
         )
 
         self.ConvBlock1_1 = nn.ModuleList(
-            [MS_ConvBlock(dim=embed_dim[0] // 2, mlp_ratio=mlp_ratios)]
+            [MS_ConvBlock_first(dim=embed_dim[0] // 2, mlp_ratio=mlp_ratios)]
         )
 
         self.downsample1_2 = MS_DownSampling(
@@ -393,6 +496,7 @@ class Spikformer(nn.Module):
         )
         self.head = nn.Linear(embed_dim[2], nb_classes)
         self.lif = Multispike(norm=1)
+        self.depths =depths
         self.kd = kd
         if self.kd:
             self.head_kd = (
@@ -509,4 +613,4 @@ if __name__ == "__main__":
 
 
     print(f"number of params: {sum(p.numel() for p in model.parameters() if p.requires_grad)}")
-    
+

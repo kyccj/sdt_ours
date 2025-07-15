@@ -52,19 +52,19 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 torchrun --standalone --nproc_per_node=8 \
 Finetune:
 
 ```shell
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 torchrun --standalone --nproc_per_node=8 \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,6,7,8 torchrun --standalone --nproc_per_node=8 \
  main_finetune.py \
-  --batch_size 128 \
+  --batch_size 100 \
   --blr 6e-4 \
   --warmup_epochs 10 \
   --layer_decay 0.75 \
-  --finetune ../pretrin_checkpoint.pth\
+  --finetune ../171M-1x8_86_2.pth\
   --epochs 150 \
   --drop_path 0.1 \
-  --model spikformer_12_768 \
-  --data_path ../imagenet1-k \
-  --output_dir ../outputs/test \
-  --log_dir ../outputs/test \
+  --model spikformer12_768 \
+  --data_path /mnt/hdd1/kyccj/data \
+  --output_dir /mnt/hdd1/kyccj/H-direct_new_base/ImageNet_SDTv3_large/ours/171M_1x8 \
+  --log_dir /mnt/hdd1/kyccj/H-direct_new_base/ImageNet_SDTv3_large/ours/171M_1x8 \
   --reprob 0.25 \
   --mixup 0.8 \
   --cutmix 1.0 \
