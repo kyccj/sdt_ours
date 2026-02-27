@@ -17,6 +17,7 @@ import torch
 
 
 
+import spikformer
 import spikformer_s_direct
 
 from timm.data import Mixup
@@ -142,7 +143,7 @@ def cal_acc(metric_logger,output,target):
     return metric_logger.acc1,metric_logger.acc5
     
 @torch.no_grad()
-def evaluate(data_loader, model, device):
+def evaluate(data_loader, model, device, model_mode="ms"):
     criterion = torch.nn.CrossEntropyLoss()
 
     metric_logger = misc.MetricLogger(delimiter="  ")
@@ -161,15 +162,21 @@ def evaluate(data_loader, model, device):
         # compute output
         with torch.cuda.amp.autocast():
             output = model(images)
-            for m in model.modules():
-                if isinstance(m,spikformer_s_direct.Multispike_first):
-                    total_spike_count += m.spike_count_int.item()
-                    encod_spike_count += m.spike_count_int_encod.item()
-                    m.spike_count_int.zero_()
-                    m.spike_count_int_encod.zero_()
-                if isinstance(m,spikformer_s_direct.Multispike):
-                    total_spike_count += m.spike_count_int.item()
-                    m.spike_count_int.zero_()
+            if model_mode == "s_direct":
+                for m in model.modules():
+                    if isinstance(m, spikformer_s_direct.Multispike_first):
+                        total_spike_count += m.spike_count_int.item()
+                        encod_spike_count += m.spike_count_int_encod.item()
+                        m.spike_count_int.zero_()
+                        m.spike_count_int_encod.zero_()
+                    if isinstance(m, spikformer_s_direct.Multispike):
+                        total_spike_count += m.spike_count_int.item()
+                        m.spike_count_int.zero_()
+            else:
+                for m in model.modules():
+                    if isinstance(m, spikformer.Multispike):
+                        total_spike_count += m.spike_count_int.item()
+                        m.spike_count_int.zero_()
             loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))

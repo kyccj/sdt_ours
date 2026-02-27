@@ -30,6 +30,7 @@ from timm.utils import *
 import util.misc as misc
 from util.misc import NativeScalerWithGradNormCount as NativeScaler
 import MAE_SDT
+import MAE_SDT_s_direct
 from engine_pretrain import train_one_epoch
 import copy
 
@@ -163,7 +164,10 @@ def main(args):
 
 
     # define the model
-    model = MAE_SDT.__dict__[args.model]()
+    if args.model_mode == "s_direct":
+        model = MAE_SDT_s_direct.__dict__[args.model]()
+    else:
+        model = MAE_SDT.__dict__[args.model]()
 
     torchinfo.summary(model)
     model.to(device)

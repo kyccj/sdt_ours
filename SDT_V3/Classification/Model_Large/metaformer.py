@@ -1821,7 +1821,7 @@ def caformer_b36_in21ft1k(pretrained=False, **kwargs):
     )
     model.default_cfg = default_cfgs["caformer_b36_in21ft1k"]
     if pretrained:
-        state_dict = torch.load('/public/liguoqi/qxr/classification/caformer_b36_in21ft1k.pth', map_location="cpu")
+        state_dict = torch.load('/data1/kyccj/teacher_models/caformer_b36_in21ft1k.pth', map_location="cpu")
         # checkpoint_model = checkpoint["model"]
         # torch.hub.load_state_dict_from_url(
         #     url=model.default_cfg["url"], map_location="cpu", check_hash=True

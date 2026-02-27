@@ -38,6 +38,7 @@ from util.datasets import build_dataset
 from util.misc import NativeScalerWithGradNormCount as NativeScaler
 from util.kd_loss import DistillationLoss
 
+import spikformer
 import spikformer_s_direct
 from engine_finetune import train_one_epoch, evaluate
 from timm.data import create_loader
@@ -399,7 +400,10 @@ def main(args):
         )
 
     
-    model = spikformer_s_direct.__dict__[args.model](kd=args.kd)
+    if args.model_mode == "s_direct":
+        model = spikformer_s_direct.__dict__[args.model](kd=args.kd)
+    else:
+        model = spikformer.__dict__[args.model](kd=args.kd)
     model.T = args.time_steps
     model_ema = None
     if args.finetune:
@@ -490,7 +494,7 @@ def main(args):
     )
 
     if args.eval:
-        test_stats = evaluate(data_loader_val, model, device)
+        test_stats = evaluate(data_loader_val, model, device, model_mode=args.model_mode)
         print(
             f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%"
         )
@@ -528,7 +532,7 @@ def main(args):
                 epoch=epoch,
             )
 
-        test_stats = evaluate(data_loader_val, model, device)
+        test_stats = evaluate(data_loader_val, model, device, model_mode=args.model_mode)
         print(
             f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%"
         )

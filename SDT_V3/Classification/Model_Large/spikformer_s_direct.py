@@ -590,7 +590,7 @@ def spikformer12_768(**kwargs):
         img_size_h=32,
         img_size_w=32,
         patch_size=16,
-        embed_dim=[196, 384, 768],
+        embed_dim=[192, 384, 768],
         num_heads=8,
         mlp_ratios=4,
         in_channels=3,
