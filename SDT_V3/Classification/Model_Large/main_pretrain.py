@@ -111,6 +111,14 @@ def get_args_parser():
     parser.add_argument('--dist_url', default='env://',
                         help='url used to set up distributed training')
 
+    # EIP regularization
+    parser.add_argument("--eip", action="store_true", default=False,
+                        help="Enable EIP spike regularization")
+    parser.add_argument("--eip_const", type=float, default=1e-8,
+                        help="EIP loss scaling constant")
+    parser.add_argument("--eip_alpha", type=float, default=3.0,
+                        help="EIP softmax temperature")
+
     return parser
 
 
@@ -168,6 +176,15 @@ def main(args):
         model = MAE_SDT_s_direct.__dict__[args.model]()
     else:
         model = MAE_SDT.__dict__[args.model]()
+
+    # EIP setup
+    if args.eip:
+        for m in model.modules():
+            if hasattr(m, 'eip_enabled'):
+                m.eip_enabled = True
+                m.eip_const = args.eip_const
+                m.eip_alpha = args.eip_alpha
+        print(f"EIP enabled: const={args.eip_const}, alpha={args.eip_alpha}")
 
     torchinfo.summary(model)
     model.to(device)

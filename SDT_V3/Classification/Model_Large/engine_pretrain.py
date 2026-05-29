@@ -43,6 +43,12 @@ def train_one_epoch(model: torch.nn.Module,
         with torch.cuda.amp.autocast():
             loss= model(samples)
 
+        # collect EIP extra losses from Multispike modules
+        for m in model.modules():
+            if hasattr(m, 'extra_losses') and m.extra_losses:
+                loss += sum(m.extra_losses)
+                m.extra_losses.clear()
+
         loss_value = loss.item()
 
         if not math.isfinite(loss_value):
@@ -75,4 +81,21 @@ def train_one_epoch(model: torch.nn.Module,
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
-    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
+    # spike count logging
+    total_spike_count = 0.0
+    for m in model.modules():
+        if hasattr(m, 'spike_count_int'):
+            total_spike_count += m.spike_count_int.item()
+            m.spike_count_int.zero_()
+    num_samples = len(data_loader.dataset)
+    avg_spike_count = total_spike_count / num_samples
+    print(f"Epoch [{epoch}] Total spikes per sample: {avg_spike_count:.1f}")
+
+    if log_writer is not None:
+        epoch_1000x = int((epoch + 1) * 1000)
+        log_writer.add_scalar('spike_count', avg_spike_count, epoch_1000x)
+
+    stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    stats['spike_count'] = avg_spike_count
+    return stats

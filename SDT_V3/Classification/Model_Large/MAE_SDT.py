@@ -41,9 +41,30 @@ class Multispike(nn.Module):
         self.lens = norm
         self.spike = spike
         self.norm=norm
+        self.register_buffer("spike_count_int", torch.tensor(0.0))
+        self.extra_losses = []
+
+        # EIP regularization config (set externally after model creation)
+        self.eip_enabled = False
+        self.eip_const = 1e-8
+        self.eip_alpha = 3.0
 
     def forward(self, inputs):
-        return self.spike.apply(inputs)/self.norm
+        out = self.spike.apply(inputs)/self.norm
+        self.spike_count_int += out.sum().detach()
+        if self.training and self.eip_enabled:
+            self.extra_losses.append(eip_loss(out, self.eip_alpha, self.eip_const))
+        return out
+
+def eip_loss(spike, alpha, const):
+    """EIP spike regularization: softmax competition + L2 norm."""
+    b = spike.shape[0]
+    sc = spike / alpha
+    sc_flat = sc.reshape(b, -1)
+    sc_norm = F.softmax(sc_flat, dim=-1).reshape_as(sc)
+    sc_loss = spike * sc_norm
+    sc_loss = torch.sqrt(torch.sum(sc_loss ** 2) + 1e-10)
+    return sc_loss * const
 
 
 
@@ -280,7 +301,7 @@ class MS_Block(nn.Module):
             self.layer_scale2 = nn.Parameter(init_values * torch.ones((dim)), requires_grad=True)
 
     def forward(self, x):
-        # T, B, C, N = x.shape
+        T, B, C, N = x.shape
         if self.model=="base":
             x= x + self.rep_conv(self.lif(x).flatten(0, 1)).reshape(T, B, C, N)
         # TODO: need channel-wise layer scale, init as 1e-6
