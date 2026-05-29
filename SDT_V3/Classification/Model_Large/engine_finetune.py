@@ -81,6 +81,10 @@ def train_one_epoch(
             else:
                 loss = criterion(outputs, targets)
                 outputs_acc = outputs
+            for m in model.modules():
+                if hasattr(m, 'extra_losses') and m.extra_losses:
+                    loss += sum(m.extra_losses)
+                    m.extra_losses.clear()
         # outputs_acc, _ = outputs
         loss_value = loss.item()
 

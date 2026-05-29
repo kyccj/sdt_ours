@@ -42,13 +42,32 @@ class Multispike(nn.Module):
         self.spike = spike
         self.norm=norm
         self.register_buffer("spike_count_int", torch.tensor(0.0))
+        self.extra_losses = []
+
+        # EIP regularization config (set externally after model creation)
+        self.eip_enabled = False
+        self.eip_const = 1e-8
+        self.eip_alpha = 3.0  # softmax temperature
 
     def forward(self, inputs):
         out = self.spike.apply(inputs)/self.norm
         if not self.training:
             spike_sum = out.sum()
             self.spike_count_int += spike_sum.detach()
+        if self.training and self.eip_enabled:
+            self.extra_losses.append(eip_loss(out, self.eip_alpha, self.eip_const))
         return out
+
+def eip_loss(spike, alpha, const):
+    """EIP spike regularization: softmax competition + L2 norm."""
+    b = spike.shape[0]
+    sc = spike / alpha
+    sc_flat = sc.reshape(b, -1)
+    sc_norm = F.softmax(sc_flat, dim=-1).reshape_as(sc)
+    sc_loss = spike * sc_norm
+    sc_loss = torch.sqrt(torch.sum(sc_loss ** 2) + 1e-10)
+    return sc_loss * const
+
 def fd_loss(spikes):
     import torch.distributions as dist
     spikes_flat = spikes.view(spikes.size(0),-1)
@@ -72,6 +91,7 @@ class Multispike_first(nn.Module):
         self.register_buffer("spike_count_int", torch.tensor(0.0))
         self.register_buffer("spike_count_int_encod", torch.tensor(0.0))
         self.extra_losses = []
+        self.fd_loss_enabled = True
 
     def forward(self, inputs):
         out = self.spike.apply(inputs)/self.norm
@@ -80,7 +100,7 @@ class Multispike_first(nn.Module):
             spike_sum = out.sum()
             self.spike_count_int += spike_sum.detach()
             self.spike_count_int_encod += spike_sum.detach()
-        if self.training:
+        if self.training and self.fd_loss_enabled:
             FD_loss= fd_loss(out)
             if FD_loss is not None:
                 self.extra_losses.append(FD_loss)
@@ -351,10 +371,11 @@ class DFE_BatchNorm2d(nn.BatchNorm2d):
     def __init__(self, num_features, **kwargs):
         super().__init__(num_features,**kwargs)
         self.extra_losses=[]
+        self.dfe_loss_enabled = True
     def forward(self,x):
         out =super().forward(x)
         self.extra_losses=[]
-        if self.training:
+        if self.training and self.dfe_loss_enabled:
             ratio = (self.bias/(self.weight+1e-10)) +1.0
             ratio_loss = torch.norm(ratio, p=2) * 1e-4
             self.extra_losses.append(ratio_loss)

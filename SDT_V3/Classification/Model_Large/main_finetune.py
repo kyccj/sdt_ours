@@ -226,6 +226,15 @@ def get_args_parser():
     )
     parser.add_argument("--time_steps", default=1, type=int)
 
+    # EIP regularization
+    parser.add_argument("--eip", action="store_true", default=False, help="Enable EIP spike regularization")
+    parser.add_argument("--eip_const", type=float, default=1e-8, help="EIP loss scaling constant")
+    parser.add_argument("--eip_alpha", type=float, default=3.0, help="EIP softmax temperature")
+
+    # Toggle existing losses
+    parser.add_argument("--no_fd_loss", action="store_true", default=False, help="Disable FD loss")
+    parser.add_argument("--no_dfe_loss", action="store_true", default=False, help="Disable DFE loss")
+
     # Dataset parameters
 
     parser.add_argument(
@@ -405,6 +414,28 @@ def main(args):
     else:
         model = spikformer.__dict__[args.model](kd=args.kd)
     model.T = args.time_steps
+
+    # Set EIP config on all Multispike modules (hidden layers)
+    if args.eip:
+        for m in model.modules():
+            if hasattr(m, 'eip_enabled'):
+                m.eip_enabled = True
+                m.eip_const = args.eip_const
+                m.eip_alpha = args.eip_alpha
+        print(f"EIP enabled: const={args.eip_const}, alpha={args.eip_alpha}")
+
+    # Toggle existing losses
+    if args.no_fd_loss:
+        for m in model.modules():
+            if hasattr(m, 'fd_loss_enabled'):
+                m.fd_loss_enabled = False
+        print("FD loss disabled")
+    if args.no_dfe_loss:
+        for m in model.modules():
+            if hasattr(m, 'dfe_loss_enabled'):
+                m.dfe_loss_enabled = False
+        print("DFE loss disabled")
+
     model_ema = None
     if args.finetune:
         checkpoint = torch.load(args.finetune, map_location="cpu")

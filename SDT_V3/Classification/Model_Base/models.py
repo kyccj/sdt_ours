@@ -47,6 +47,11 @@ class MultiSpike(nn.Module):
         self.register_buffer("spike_count_int", torch.tensor(0.0))
         self.extra_losses = []
 
+        # EIP regularization config (set externally after model creation)
+        self.eip_enabled = False
+        self.eip_const = 1e-8
+        self.eip_alpha = 3.0  # softmax temperature
+
     @staticmethod
     def spike_function(x, min_value, max_value):
         return Quant.apply(x, min_value, max_value)
@@ -60,7 +65,27 @@ class MultiSpike(nn.Module):
         if not self.training:
             spike_sum = out.sum()
             self.spike_count_int += spike_sum.detach()
+        if self.training and self.eip_enabled:
+            self.extra_losses.append(eip_loss(out, self.eip_alpha, self.eip_const))
         return out
+
+def eip_loss(spike, alpha, const):
+    """EIP spike regularization: softmax competition + L2 norm.
+
+    Penalizes neurons with high relative firing rates to encourage
+    balanced spike activity across the layer (homeostatic regulation).
+    """
+    b = spike.shape[0]
+    # softmax over all dims except batch, with temperature scaling
+    sc = spike / alpha
+    sc_flat = sc.reshape(b, -1)
+    sc_norm = F.softmax(sc_flat, dim=-1).reshape_as(sc)
+    # element-wise: spike * softmax rate
+    sc_loss = spike * sc_norm
+    # L2 norm
+    sc_loss = torch.sqrt(torch.sum(sc_loss ** 2) + 1e-10)
+    return sc_loss * const
+
 
 def fd_loss(spikes):
     import torch.distributions as dist

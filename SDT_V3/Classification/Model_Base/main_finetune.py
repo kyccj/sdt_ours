@@ -238,6 +238,11 @@ def get_args_parser():
     )
     parser.add_argument("--time_steps", default=1, type=int)
 
+    # EIP regularization
+    parser.add_argument("--eip", action="store_true", default=False, help="Enable EIP spike regularization")
+    parser.add_argument("--eip_const", type=float, default=1e-8, help="EIP loss scaling constant")
+    parser.add_argument("--eip_alpha", type=float, default=3.0, help="EIP softmax temperature")
+
     # Dataset parameters
 
     parser.add_argument(
@@ -390,6 +395,16 @@ def main(args):
     model = models.__dict__[args.model]()
 
     model.T = args.time_steps
+
+    # Set EIP config on all MultiSpike modules (hidden layers)
+    if args.eip:
+        for m in model.modules():
+            if isinstance(m, models.MultiSpike):
+                m.eip_enabled = True
+                m.eip_const = args.eip_const
+                m.eip_alpha = args.eip_alpha
+        print(f"EIP enabled: const={args.eip_const}, alpha={args.eip_alpha}")
+
     if args.finetune:
         checkpoint = torch.load(args.finetune, map_location="cpu")
         checkpoint_model = checkpoint["model"]
