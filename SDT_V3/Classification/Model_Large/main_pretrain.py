@@ -31,6 +31,7 @@ import util.misc as misc
 from util.misc import NativeScalerWithGradNormCount as NativeScaler
 import MAE_SDT
 import MAE_SDT_s_direct
+import MAE_SDT_a2sg
 from engine_pretrain import train_one_epoch
 import copy
 
@@ -114,11 +115,21 @@ def get_args_parser():
     return parser
 
 
+def _debug_log(msg, output_dir="./outputs/a2sg_768/pretrain"):
+    """Write debug message directly to file, bypassing torchrun output handling."""
+    import os, datetime
+    os.makedirs(output_dir, exist_ok=True)
+    with open(os.path.join(output_dir, "debug.log"), "a") as f:
+        f.write(f"[{datetime.datetime.now()}] {msg}\n")
+        f.flush()
+
 def main(args):
     misc.init_distributed_mode(args)
 
-    print('job dir: {}'.format(os.path.dirname(os.path.realpath(__file__))))
-    print("{}".format(args).replace(', ', ',\n'))
+    _debug_log(f"Rank {misc.get_rank()}: init_distributed_mode done")
+
+    print('job dir: {}'.format(os.path.dirname(os.path.realpath(__file__)))  , flush=True)
+    print("{}".format(args).replace(', ', ',\n'), flush=True)
 
     device = torch.device(args.device)
 
@@ -129,6 +140,8 @@ def main(args):
 
     cudnn.benchmark = True
 
+    _debug_log(f"Rank {misc.get_rank()}: Creating dataset...")
+    print(f"[Rank {misc.get_rank()}] Creating dataset...", flush=True)
     # simple augmentation
     transform_train = transforms.Compose([
             transforms.RandomResizedCrop(args.input_size, scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
@@ -136,7 +149,7 @@ def main(args):
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
     dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'train'), transform=transform_train)
-    print(dataset_train)
+    print(dataset_train, flush=True)
 
     if True:  # args.distributed:
         num_tasks = misc.get_world_size()
@@ -164,13 +177,21 @@ def main(args):
 
 
     # define the model
+    _debug_log(f"Rank {misc.get_rank()}: Creating model...")
+    print(f"[Rank {misc.get_rank()}] Creating model...", flush=True)
     if args.model_mode == "s_direct":
         model = MAE_SDT_s_direct.__dict__[args.model]()
+    elif args.model_mode == "a2sg":
+        model = MAE_SDT_a2sg.__dict__[args.model]()
     else:
         model = MAE_SDT.__dict__[args.model]()
 
-    torchinfo.summary(model)
+    _debug_log(f"Rank {misc.get_rank()}: Model created, moving to GPU...")
+    print(f"[Rank {misc.get_rank()}] Model created, moving to GPU...", flush=True)
+    # torchinfo.summary(model)  # disabled: too slow for large models on CPU
     model.to(device)
+    _debug_log(f"Rank {misc.get_rank()}: Model on GPU")
+    print(f"[Rank {misc.get_rank()}] Model on GPU", flush=True)
 
     model_without_ddp = model
 #     print("Model = %s" % str(model_without_ddp))
@@ -187,8 +208,10 @@ def main(args):
     print("effective batch size: %d" % eff_batch_size)
 
     if args.distributed:
+        _debug_log(f"Rank {misc.get_rank()}: Wrapping with DDP...")
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
         model_without_ddp = model.module
+        _debug_log(f"Rank {misc.get_rank()}: DDP done")
     
     # following timm: set wd as 0 for bias and norm layers
     
@@ -199,11 +222,16 @@ def main(args):
 
     misc.load_model(args=args, model_without_ddp=model_without_ddp, optimizer=optimizer, loss_scaler=loss_scaler)
 
+    _debug_log(f"Rank {misc.get_rank()}: Start training for {args.epochs} epochs")
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
+        if args.model_mode == "a2sg":
+            for m in model.modules():
+                if isinstance(m, MAE_SDT_a2sg.Multispike):
+                    m.train_counter = epoch
         train_stats = train_one_epoch(
             model, data_loader_train,
             optimizer, device, epoch, loss_scaler,
