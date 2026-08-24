@@ -24,7 +24,37 @@ def build_dataset(is_train, args):
     root = os.path.join(args.data_path, "train" if is_train else "val")
     dataset = datasets.ImageFolder(root, transform=transform)
 
+    n_cls = getattr(args, "subset_classes", 0)
+    frac = getattr(args, "subset_frac", 1.0)
+    if n_cls or frac < 1.0:
+        dataset = _subset(dataset, n_cls, frac, is_train)
     return dataset
+
+
+def _subset(dataset, n_cls, frac, is_train):
+    """First n_cls classes, first frac of the images in each -- for the rho scan.
+
+    Deterministic (no shuffling), so a baseline arm and a regularized arm see exactly
+    the same images.  Class labels keep their original ids; the head stays 1000-way.
+    """
+    from torch.utils.data import Subset
+    from collections import defaultdict
+
+    by_class = defaultdict(list)
+    for idx, (_, label) in enumerate(dataset.samples):
+        if n_cls and label >= n_cls:
+            continue
+        by_class[label].append(idx)
+
+    keep = []
+    for label, idxs in by_class.items():
+        k = len(idxs) if frac >= 1.0 else max(1, int(len(idxs) * frac))
+        keep.extend(idxs[:k])
+    keep.sort()
+    print("[subset] {}: {} images over {} classes (of {} / {})".format(
+        "train" if is_train else "val", len(keep), len(by_class),
+        len(dataset.samples), len(dataset.classes)))
+    return Subset(dataset, keep)
 
 def build_transform(is_train, args):
     mean = IMAGENET_DEFAULT_MEAN

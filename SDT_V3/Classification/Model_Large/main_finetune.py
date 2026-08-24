@@ -40,6 +40,8 @@ from util.kd_loss import DistillationLoss
 
 import spikformer
 import spikformer_s_direct
+import spikformer_a2sg
+import spike_reg
 from engine_finetune import train_one_epoch, evaluate
 from timm.data import create_loader
 
@@ -310,6 +312,20 @@ def get_args_parser():
         "--dist_url", default="env://", help="url used to set up distributed training"
     )
 
+    # spike regularization (loss-ratio lambda control + brake)
+    spike_reg.add_args(parser)
+    parser.add_argument(
+        "--reg_count", action="store_true", default=False,
+        help="wrap the neurons for eval spike counting only, no regularization. "
+             "The plain ms model has no spike counter of its own, so a baseline run "
+             "needs this to report spikes.",
+    )
+    # dataset subsetting -- for the rho scan, so it does not cost a full-ImageNet run
+    parser.add_argument("--subset_classes", default=0, type=int,
+                        help="use only the first N classes (0 = all)")
+    parser.add_argument("--subset_frac", default=1.0, type=float,
+                        help="use this fraction of the images per class (1.0 = all)")
+
     return parser
 
 
@@ -402,6 +418,8 @@ def main(args):
     
     if args.model_mode == "s_direct":
         model = spikformer_s_direct.__dict__[args.model](kd=args.kd)
+    elif args.model_mode == "a2sg":
+        model = spikformer_a2sg.__dict__[args.model](kd=args.kd)
     else:
         model = spikformer.__dict__[args.model](kd=args.kd)
     model.T = args.time_steps
@@ -409,8 +427,31 @@ def main(args):
     if args.finetune:
         checkpoint = torch.load(args.finetune, map_location="cpu")
         checkpoint_model = checkpoint["model"]
-        msg = model.load_state_dict(checkpoint_model, strict=False)
+        # Filter out keys with shape mismatch (e.g. pretrain embed_dim differs from finetune)
+        model_state = model.state_dict()
+        filtered = {}
+        skipped = []
+        for k, v in checkpoint_model.items():
+            if k in model_state and model_state[k].shape != v.shape:
+                skipped.append(k)
+            else:
+                filtered[k] = v
+        if skipped:
+            print(f"Skipped {len(skipped)} keys due to shape mismatch: {skipped[:5]}...")
+        msg = model.load_state_dict(filtered, strict=False)
         print(msg)
+
+    # Wrap the neurons AFTER loading, so checkpoint keys are matched against the
+    # untouched model.  The wrapper adds no persistent buffers, so saving stays
+    # compatible either way.
+    reg_cfg = spike_reg.SpikeRegConfig.from_args(args)
+    spike_reg.REG.enabled = reg_cfg.enabled
+    reg_ctl = None
+    if reg_cfg.enabled or args.reg_count:
+        print("[spike_reg] {}".format(reg_cfg))
+        spike_reg.convert_multispike(model, reg_cfg)
+        if reg_cfg.enabled:
+            reg_ctl = spike_reg.LossRatioController(reg_cfg)
 
     model.to(device)
     if args.MODEL_EMA:
@@ -508,6 +549,13 @@ def main(args):
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
+        if args.model_mode == "a2sg":
+            for m in model.modules():
+                if isinstance(m, spikformer_a2sg.Multispike):
+                    m.train_counter = epoch
+        # lambda for this epoch was solved at the end of the previous one; it is a
+        # plain float, identical on every rank, so nothing has to be broadcast
+        reg_info = {}
         train_stats,model_ema = train_one_epoch(
             model,
             criterion,
@@ -521,6 +569,22 @@ def main(args):
             log_writer=log_writer,
             args=args,
             model_ema=model_ema)
+
+        if reg_ctl is not None:
+            # lambda <- rho * L_task / R, then the brake.  train_stats values are
+            # already averaged over batches and across ranks (MetricLogger).
+            lam, reg_info = reg_ctl.step(
+                epoch,
+                train_stats.get("task_loss", train_stats.get("loss", 0.0)),
+                train_stats.get("reg_R", 0.0),
+                train_stats.get("spikes", 0.0),
+            )
+            spike_reg.REG.lam = lam
+            print("[spike_reg] ep{} lambda={:.4g} R={:.4g} spikes/img={:.4g} "
+                  "S/S1={:.4g} brake={:.0f}".format(
+                      epoch, lam, reg_info["R"], reg_info["spikes"],
+                      reg_info["s_ratio"], reg_info["brake_on"]))
+
         if args.output_dir and (epoch % 50 == 0 or epoch + 1 == args.epochs):
             print("Saving model at epoch:", epoch)
             misc.save_model(
@@ -539,7 +603,9 @@ def main(args):
         max_accuracy = max(max_accuracy, test_stats["acc1"])
         print(f"Max accuracy: {max_accuracy:.2f}%")
         if args.output_dir and test_stats["acc1"] > best_acc:
-            print("Saving model at epoch:", epoch)
+            best_acc = test_stats["acc1"]
+            best_epoch = epoch
+            print(f"New best accuracy: {best_acc:.2f}% at epoch {epoch}, saving model")
             misc.save_model(
                 args=args,
                 model=model,
@@ -557,6 +623,9 @@ def main(args):
         log_stats = {
             **{f"train_{k}": v for k, v in train_stats.items()},
             **{f"test_{k}": v for k, v in test_stats.items()},
+            # NaN is not valid JSON for strict parsers -> null
+            **{f"reg_{k}": (None if isinstance(v, float) and v != v else v)
+               for k, v in reg_info.items()},
             "epoch": epoch,
             "n_parameters": n_parameters,
         }
