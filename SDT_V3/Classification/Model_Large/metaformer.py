@@ -18,6 +18,7 @@ ConvFormer and CAFormer.
 Some implementations are modified from timm (https://github.com/rwightman/pytorch-image-models).
 """
 from functools import partial
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -1821,7 +1822,14 @@ def caformer_b36_in21ft1k(pretrained=False, **kwargs):
     )
     model.default_cfg = default_cfgs["caformer_b36_in21ft1k"]
     if pretrained:
-        state_dict = torch.load('/public/liguoqi/qxr/classification/caformer_b36_in21ft1k.pth', map_location="cpu")
+        # Upstream hardcodes the authors' own server path; fall back to the
+        # official weights (cached under ~/.cache/torch) when it is absent.
+        _local = '/data/kyccj/pretrained/caformer_b36_in21ft1k.pth'
+        if os.path.isfile(_local):
+            state_dict = torch.load(_local, map_location="cpu")
+        else:
+            state_dict = torch.hub.load_state_dict_from_url(
+                url=model.default_cfg["url"], map_location="cpu")
         # checkpoint_model = checkpoint["model"]
         # torch.hub.load_state_dict_from_url(
         #     url=model.default_cfg["url"], map_location="cpu", check_hash=True

@@ -1,4 +1,5 @@
 from functools import partial
+import os
 import torch
 import torch.nn as nn
 import torch
@@ -17,7 +18,11 @@ from torchvision import transforms
 import matplotlib.pyplot as plt
 import torch.nn as nn
 #timestep 1x4
-T=8
+# D = upper limit of the integer activation (the "D" in the paper's T x D
+# notation). Bound into default args below at import time, so it cannot be
+# changed at runtime -- select it via the SDT_D env var before launching.
+# Defaults to 8, which is what every run so far used.
+T = int(os.environ.get("SDT_D", 8))
 
 class multispike(torch.autograd.Function):
     @staticmethod
@@ -590,7 +595,7 @@ def spikformer12_768(**kwargs):
         img_size_h=32,
         img_size_w=32,
         patch_size=16,
-        embed_dim=[196, 384, 768],
+        embed_dim=[192, 384, 768],
         num_heads=8,
         mlp_ratios=4,
         in_channels=3,

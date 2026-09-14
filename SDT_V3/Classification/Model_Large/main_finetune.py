@@ -532,17 +532,32 @@ def main(args):
         print(
             f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%"
         )
+        # The EMA weights were updated every step but never evaluated or saved
+        # upstream (save_model ignores its `model` arg). Report them too; this
+        # does not change training, it only surfaces a number we already pay for.
+        if model_ema is not None:
+            ema_stats = evaluate(data_loader_val, model_ema.ema, device)
+            print(f"EMA accuracy on the {len(dataset_val)} test images: {ema_stats['acc1']:.1f}%")
+            test_stats["ema_acc1"] = ema_stats["acc1"]
+            test_stats["ema_acc5"] = ema_stats["acc5"]
         max_accuracy = max(max_accuracy, test_stats["acc1"])
         print(f"Max accuracy: {max_accuracy:.2f}%")
         if args.output_dir and test_stats["acc1"] > best_acc:
-            print("Saving model at epoch:", epoch)
-            misc.save_model(
-                args=args,
-                model=model,
-                model_without_ddp=model_without_ddp,
-                optimizer=optimizer,
-                loss_scaler=loss_scaler,
-                epoch=epoch,
+            # best_acc was never updated upstream, so this fired every epoch and
+            # wrote one 2GB checkpoint per epoch. Track it, and keep the best in a
+            # single fixed file instead of one per improvement.
+            best_acc = test_stats["acc1"]
+            print("Saving best model at epoch:", epoch, "acc1:", best_acc)
+            misc.save_on_master(
+                {
+                    "model": model_without_ddp.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "epoch": epoch,
+                    "scaler": loss_scaler.state_dict(),
+                    "args": args,
+                    "model_ema": (model_ema.ema.state_dict() if model_ema is not None else None),
+                },
+                os.path.join(args.output_dir, "checkpoint-best.pth"),
             )
 
         if log_writer is not None:
